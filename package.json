@@ -9,6 +9,7 @@
 		"format": "prettier --write ."
 	},
 	"dependencies": {
+		"harper": "^5.0.11",
 		"solid-js": "^1.9.3",
 		"vite": "^5.4.9",
 		"vite-plugin-solid": "^2.10.2"
@@ -20,4 +21,3 @@
 	"prettier": "@harperdb/code-guidelines/prettier",
 	"license": "Apache-2.0"
 }
-

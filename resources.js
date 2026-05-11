@@ -1,3 +1,4 @@
+import { tables } from 'harper';
 import fs from 'node:fs';
 import path from 'node:path';
 import { generateHydrationScript } from 'solid-js/web';
