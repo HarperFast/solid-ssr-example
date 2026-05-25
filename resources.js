@@ -27,19 +27,19 @@ async function renderPost(post) {
 }
 
 export class UncachedBlog extends tables.Post {
-	async get() {
+	static async get(target, context) {
 		return {
 			status: 200,
 			headers: { 'Content-Type': 'text/html' },
-			body: await renderPost(this),
+			body: await renderPost(target),
 		};
 	}
 }
 
 class PageBuilder extends tables.Post {
-	async get() {
+	static async get(target, context) {
 		return {
-			content: await renderPost(this),
+			content: await renderPost(target),
 		};
 	}
 }
@@ -47,10 +47,10 @@ class PageBuilder extends tables.Post {
 tables.BlogCache.sourcedFrom(PageBuilder);
 
 export class CachedBlog extends tables.BlogCache {
-	async get() {
+	static async get(target, context) {
 		return {
 			contentType: 'text/html',
-			data: this.content,
+			data: target.content,
 		};
 	}
 }
