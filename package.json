@@ -1,5 +1,6 @@
 {
 	"name": "solid-ssr-example",
+	"version": "1.0.0",
 	"private": true,
 	"type": "module",
 	"scripts": {
