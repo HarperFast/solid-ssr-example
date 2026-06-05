@@ -20,6 +20,7 @@
  */
 import { suite, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { cp, mkdtemp, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -64,6 +65,24 @@ async function buildFixture(): Promise<string> {
 	}
 
 	return fixtureDir;
+}
+
+/**
+ * Issue a conditional GET (If-None-Match / If-Modified-Since) and return the status.
+ * The cache entry is written by `sourcedFrom` resolution, which can settle slightly after
+ * the first response is sent, so we retry briefly to obtain a stable cache hit.
+ */
+async function conditionalGet(url: string, etag: string | null, lastModified: string | null): Promise<Response> {
+	const headers: Record<string, string> = {};
+	if (etag) headers['If-None-Match'] = etag;
+	if (lastModified) headers['If-Modified-Since'] = lastModified;
+	let res = await fetch(url, { headers });
+	for (let attempt = 0; attempt < 10 && res.status !== 304; attempt++) {
+		await res.text();
+		await sleep(250);
+		res = await fetch(url, { headers });
+	}
+	return res;
 }
 
 void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
@@ -116,12 +135,7 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		const lastModified = first.headers.get('Last-Modified');
 		assert.ok(etag || lastModified, 'CachedBlog response should carry cache validators (ETag/Last-Modified)');
 
-		const conditional = await fetch(blogURL, {
-			headers: {
-				...(etag ? { 'If-None-Match': etag } : {}),
-				...(lastModified ? { 'If-Modified-Since': lastModified } : {}),
-			},
-		});
+		const conditional = await conditionalGet(blogURL, etag, lastModified);
 		assert.equal(conditional.status, 304, `expected 304 cache hit, got ${conditional.status}`);
 	});
 
@@ -137,12 +151,7 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		const lastModified = primed.headers.get('Last-Modified');
 
 		// Confirm it's a cache hit before mutation.
-		const beforeMutation = await fetch(blogURL, {
-			headers: {
-				...(etag ? { 'If-None-Match': etag } : {}),
-				...(lastModified ? { 'If-Modified-Since': lastModified } : {}),
-			},
-		});
+		const beforeMutation = await conditionalGet(blogURL, etag, lastModified);
 		assert.equal(beforeMutation.status, 304);
 
 		// Mutate the source Post via REST PATCH.
@@ -175,12 +184,7 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		// New validators should again produce a cache hit.
 		const newEtag = afterMutation.headers.get('ETag');
 		const newLastModified = afterMutation.headers.get('Last-Modified');
-		const reCached = await fetch(blogURL, {
-			headers: {
-				...(newEtag ? { 'If-None-Match': newEtag } : {}),
-				...(newLastModified ? { 'If-Modified-Since': newLastModified } : {}),
-			},
-		});
+		const reCached = await conditionalGet(blogURL, newEtag, newLastModified);
 		assert.equal(reCached.status, 304, `expected re-cached 304 after refresh, got ${reCached.status}`);
 	});
 });
