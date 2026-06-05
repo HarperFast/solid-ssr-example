@@ -13,6 +13,10 @@
  * `pretest:integration` npm script runs the build; this suite assembles a clean component
  * fixture (config.yaml, resources.js, schema.graphql, dist/) in a temp dir and pre-installs
  * it via setupHarperWithFixture so the routes are live on first boot.
+ *
+ * resources.js also imports `solid-js/web` at runtime (for generateHydrationScript), so the
+ * fixture includes a minimal node_modules with solid-js and its runtime deps — mirroring a
+ * real component deployment where the package's dependencies are installed alongside it.
  */
 import { suite, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,6 +54,14 @@ async function buildFixture(): Promise<string> {
 		await cp(join(projectRoot, file), join(fixtureDir, file));
 	}
 	await cp(distDir, join(fixtureDir, 'dist'), { recursive: true });
+
+	// resources.js imports 'solid-js/web' at runtime, so the component needs solid-js and
+	// its (closed) runtime dependency set available in its own node_modules.
+	const nodeModules = join(projectRoot, 'node_modules');
+	const runtimeDeps = ['solid-js', 'csstype', 'seroval', 'seroval-plugins'];
+	for (const dep of runtimeDeps) {
+		await cp(join(nodeModules, dep), join(fixtureDir, 'node_modules', dep), { recursive: true });
+	}
 
 	return fixtureDir;
 }
