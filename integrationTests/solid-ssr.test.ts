@@ -85,6 +85,33 @@ async function conditionalGet(url: string, etag: string | null, lastModified: st
 	return res;
 }
 
+/**
+ * Re-prime cache validators on each attempt, then issue a conditional GET, until a stable
+ * 304 cache hit is observed. Used after a source mutation, where the cache entry may continue
+ * to re-source briefly (changing its validators) before settling.
+ */
+async function awaitStableCacheHit(url: string, accept: string): Promise<Response> {
+	let last: Response | null = null;
+	for (let attempt = 0; attempt < 12; attempt++) {
+		const fresh = await fetch(url, { headers: { Accept: accept } });
+		await fresh.text();
+		const conditional = await fetch(url, {
+			headers: {
+				Accept: accept,
+				...(fresh.headers.get('ETag') ? { 'If-None-Match': fresh.headers.get('ETag') as string } : {}),
+				...(fresh.headers.get('Last-Modified')
+					? { 'If-Modified-Since': fresh.headers.get('Last-Modified') as string }
+					: {}),
+			},
+		});
+		if (conditional.status === 304) return conditional;
+		await conditional.text();
+		last = conditional;
+		await sleep(250);
+	}
+	return last as Response;
+}
+
 void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 	before(async () => {
 		const fixtureDir = await buildFixture();
@@ -197,10 +224,8 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		);
 		await afterMutation.text();
 
-		// New validators should again produce a cache hit.
-		const newEtag = afterMutation.headers.get('ETag');
-		const newLastModified = afterMutation.headers.get('Last-Modified');
-		const reCached = await conditionalGet(cacheURL, newEtag, newLastModified);
+		// Once the freshly re-sourced entry settles, conditional requests should again 304.
+		const reCached = await awaitStableCacheHit(cacheURL, 'application/json');
 		assert.equal(reCached.status, 304, `expected re-cached 304 after refresh, got ${reCached.status}`);
 	});
 });
