@@ -122,7 +122,7 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		assert.match(html, /window\.__INITIAL_POST_DATA__/);
 	});
 
-	void test('CachedBlog renders HTML and serves a conditional cache hit (304)', async () => {
+	void test('CachedBlog renders SSR HTML and serves identical bytes from cache', async () => {
 		const blogURL = `${ctx.harper.httpURL}/CachedBlog/0`;
 
 		const first = await fetch(blogURL);
@@ -130,28 +130,43 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		assert.match(first.headers.get('content-type') ?? '', /text\/html/);
 		const firstHTML = await first.text();
 		assert.match(firstHTML, /Hello, World!/);
+		assert.match(firstHTML, /This is a test post/);
 
+		// A second request for the same (unchanged) Post must serve byte-identical cached HTML.
+		const second = await fetch(blogURL);
+		assert.equal(second.status, 200);
+		const secondHTML = await second.text();
+		assert.equal(secondHTML, firstHTML, 'cached render should be byte-identical for an unchanged Post');
+	});
+
+	// The BlogCache table is the Harper caching primitive (sourcedFrom PageBuilder, expiration: 3600)
+	// and is exported directly. It exercises Harper's native conditional-request (ETag/304) handling.
+	void test('BlogCache table serves a conditional cache hit (304)', async () => {
+		const cacheURL = `${ctx.harper.httpURL}/BlogCache/0`;
+
+		const first = await fetch(cacheURL, { headers: { Accept: 'application/json' } });
+		assert.equal(first.status, 200);
+		await first.text();
 		const etag = first.headers.get('ETag');
 		const lastModified = first.headers.get('Last-Modified');
-		assert.ok(etag || lastModified, 'CachedBlog response should carry cache validators (ETag/Last-Modified)');
+		assert.ok(etag || lastModified, 'BlogCache response should carry cache validators (ETag/Last-Modified)');
 
-		const conditional = await conditionalGet(blogURL, etag, lastModified);
+		const conditional = await conditionalGet(cacheURL, etag, lastModified);
 		assert.equal(conditional.status, 304, `expected 304 cache hit, got ${conditional.status}`);
 	});
 
-	void test('updating the Post invalidates the cache, then re-caches', async () => {
-		const blogURL = `${ctx.harper.httpURL}/CachedBlog/0`;
+	void test('updating the source Post invalidates the cached BlogCache entry, then re-caches', async () => {
+		const cacheURL = `${ctx.harper.httpURL}/BlogCache/0`;
 		const postURL = `${ctx.harper.httpURL}/Post/0`;
 
-		// Prime the cache and capture validators.
-		const primed = await fetch(blogURL);
+		// Prime the cache and confirm a stable cache hit.
+		const primed = await fetch(cacheURL, { headers: { Accept: 'application/json' } });
 		assert.equal(primed.status, 200);
 		await primed.text();
 		const etag = primed.headers.get('ETag');
 		const lastModified = primed.headers.get('Last-Modified');
 
-		// Confirm it's a cache hit before mutation.
-		const beforeMutation = await conditionalGet(blogURL, etag, lastModified);
+		const beforeMutation = await conditionalGet(cacheURL, etag, lastModified);
 		assert.equal(beforeMutation.status, 304);
 
 		// Mutate the source Post via REST PATCH.
@@ -167,9 +182,10 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		});
 		assert.ok(patch.ok, `PATCH should succeed, got ${patch.status}`);
 
-		// The previously-valid cache entry must now be stale -> 200 with fresh content.
-		const afterMutation = await fetch(blogURL, {
+		// The previously-valid cache validators must now be stale -> 200 with a fresh entry.
+		const afterMutation = await fetch(cacheURL, {
 			headers: {
+				Accept: 'application/json',
 				...(etag ? { 'If-None-Match': etag } : {}),
 				...(lastModified ? { 'If-Modified-Since': lastModified } : {}),
 			},
@@ -184,7 +200,7 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		// New validators should again produce a cache hit.
 		const newEtag = afterMutation.headers.get('ETag');
 		const newLastModified = afterMutation.headers.get('Last-Modified');
-		const reCached = await conditionalGet(blogURL, newEtag, newLastModified);
+		const reCached = await conditionalGet(cacheURL, newEtag, newLastModified);
 		assert.equal(reCached.status, 304, `expected re-cached 304 after refresh, got ${reCached.status}`);
 	});
 });
