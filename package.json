@@ -1,11 +1,13 @@
 {
 	"name": "solid-ssr-example",
+	"version": "1.0.0",
 	"private": true,
 	"type": "module",
 	"scripts": {
 		"build:client": "vite build --ssrManifest --outDir dist/client",
 		"build:server": "vite build --ssr src/entry-server.jsx --outDir dist/server",
 		"build": "npm run build:client && npm run build:server",
+		"postinstall": "npm run build",
 		"format": "prettier --write .",
 		"pretest:integration": "npm run build",
 		"test:integration": "harper-integration-test-run integrationTests/**/*.test.ts"
