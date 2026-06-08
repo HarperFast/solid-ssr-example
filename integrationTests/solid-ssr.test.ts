@@ -149,21 +149,47 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		assert.match(html, /window\.__INITIAL_POST_DATA__/);
 	});
 
-	void test('CachedBlog renders SSR HTML and serves identical bytes from cache', async () => {
+	void test('CachedBlog renders SSR HTML into the cache and serves identical bytes from cache', async () => {
 		const blogURL = `${ctx.harper.httpURL}/CachedBlog/0`;
 
 		const first = await fetch(blogURL);
 		assert.equal(first.status, 200);
 		assert.match(first.headers.get('content-type') ?? '', /text\/html/);
 		const firstHTML = await first.text();
-		assert.match(firstHTML, /Hello, World!/);
-		assert.match(firstHTML, /This is a test post/);
+
+		// Regression guard for the v5 caching-source bug: if the cache source uses a *static*
+		// get(), Harper never invokes it (it instantiates the source and calls instance get()),
+		// the cache stores the raw Post record, and CachedBlog's `cached.content` is undefined —
+		// yielding a 200 with an EMPTY body. Assert the body is non-empty and actually contains
+		// the SSR'd markers so a fallthrough-to-raw-record regression fails loudly here.
+		assert.ok(firstHTML.length > 0, 'CachedBlog must serve a non-empty rendered HTML body');
+		assert.match(firstHTML, /window\.__INITIAL_POST_DATA__/, 'cached HTML must contain the SSR hydration data');
+		assert.match(firstHTML, /Hello, World!/, 'cached HTML must contain the rendered post title');
+		assert.match(firstHTML, /This is a test post/, 'cached HTML must contain the rendered post body');
 
 		// A second request for the same (unchanged) Post must serve byte-identical cached HTML.
 		const second = await fetch(blogURL);
 		assert.equal(second.status, 200);
 		const secondHTML = await second.text();
 		assert.equal(secondHTML, firstHTML, 'cached render should be byte-identical for an unchanged Post');
+	});
+
+	// The CachedBlog endpoint reads through the BlogCache (sourcedFrom PageBuilder). Exercising
+	// the conditional-request (ETag/304) path THROUGH /CachedBlog — not just the raw BlogCache
+	// table — confirms the rendered HTML cache entry participates in Harper's caching protocol.
+	void test('CachedBlog serves a conditional cache hit (304) for rendered HTML', async () => {
+		const blogURL = `${ctx.harper.httpURL}/CachedBlog/0`;
+
+		const first = await fetch(blogURL);
+		assert.equal(first.status, 200);
+		const firstHTML = await first.text();
+		assert.match(firstHTML, /window\.__INITIAL_POST_DATA__/);
+		const etag = first.headers.get('ETag');
+		const lastModified = first.headers.get('Last-Modified');
+		assert.ok(etag || lastModified, 'CachedBlog response should carry cache validators (ETag/Last-Modified)');
+
+		const conditional = await conditionalGet(blogURL, etag, lastModified);
+		assert.equal(conditional.status, 304, `expected 304 cache hit on /CachedBlog, got ${conditional.status}`);
 	});
 
 	// The BlogCache table is the Harper caching primitive (sourcedFrom PageBuilder, expiration: 3600)
@@ -182,21 +208,26 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		assert.equal(conditional.status, 304, `expected 304 cache hit, got ${conditional.status}`);
 	});
 
-	void test('updating the source Post invalidates the cached BlogCache entry, then re-caches', async () => {
-		const cacheURL = `${ctx.harper.httpURL}/BlogCache/0`;
+	void test('updating the source Post invalidates the cached CachedBlog render, then re-caches', async () => {
+		// Drive invalidation THROUGH the /CachedBlog endpoint (rendered HTML), not just the raw
+		// BlogCache table, so the test covers the read-through render path the example serves.
+		const blogURL = `${ctx.harper.httpURL}/CachedBlog/0`;
 		const postURL = `${ctx.harper.httpURL}/Post/0`;
 
-		// Prime the cache and confirm a stable cache hit.
-		const primed = await fetch(cacheURL, { headers: { Accept: 'application/json' } });
+		// Prime the cache and confirm a stable cache hit on the rendered HTML.
+		const primed = await fetch(blogURL);
 		assert.equal(primed.status, 200);
-		await primed.text();
+		const primedHTML = await primed.text();
+		assert.match(primedHTML, /window\.__INITIAL_POST_DATA__/, 'primed CachedBlog body must be rendered HTML');
 		const etag = primed.headers.get('ETag');
 		const lastModified = primed.headers.get('Last-Modified');
 
-		const beforeMutation = await conditionalGet(cacheURL, etag, lastModified);
+		const beforeMutation = await conditionalGet(blogURL, etag, lastModified);
 		assert.equal(beforeMutation.status, 304);
 
-		// Mutate the source Post via REST PATCH.
+		// Mutate the source Post via REST PATCH with a uniquely-identifiable comment so we can
+		// confirm the re-rendered HTML reflects the new source data.
+		const marker = `Integration comment ${Date.now()}`;
 		const current = (await (await fetch(postURL, { headers: { Accept: 'application/json' } })).json()) as {
 			comments: string[];
 		};
@@ -204,15 +235,14 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
-				comments: [...current.comments, `Integration comment ${Date.now()}`],
+				comments: [...current.comments, marker],
 			}),
 		});
 		assert.ok(patch.ok, `PATCH should succeed, got ${patch.status}`);
 
 		// The previously-valid cache validators must now be stale -> 200 with a fresh entry.
-		const afterMutation = await fetch(cacheURL, {
+		const afterMutation = await fetch(blogURL, {
 			headers: {
-				Accept: 'application/json',
 				...(etag ? { 'If-None-Match': etag } : {}),
 				...(lastModified ? { 'If-Modified-Since': lastModified } : {}),
 			},
@@ -222,10 +252,12 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 			200,
 			`expected cache invalidation (200) after Post update, got ${afterMutation.status}`
 		);
-		await afterMutation.text();
+		const afterHTML = await afterMutation.text();
+		// The re-sourced render must include the new comment from the mutated Post.
+		assert.match(afterHTML, new RegExp(marker), 're-cached CachedBlog HTML must reflect the updated source Post');
 
 		// Once the freshly re-sourced entry settles, conditional requests should again 304.
-		const reCached = await awaitStableCacheHit(cacheURL, 'application/json');
+		const reCached = await awaitStableCacheHit(blogURL, 'text/html');
 		assert.equal(reCached.status, 304, `expected re-cached 304 after refresh, got ${reCached.status}`);
 	});
 });
