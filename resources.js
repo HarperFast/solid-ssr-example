@@ -29,6 +29,7 @@ async function renderPost(post) {
 export class UncachedBlog extends tables.Post {
 	async get(query) {
 		const post = await super.get(query);
+		if (!post) return { status: 404 };
 		return {
 			status: 200,
 			headers: { 'Content-Type': 'text/html' },
@@ -43,6 +44,7 @@ export class UncachedBlog extends tables.Post {
 class PageBuilder extends tables.Post {
 	async get(query) {
 		const post = await super.get(query);
+		if (!post) return { status: 404 };
 		return {
 			content: await renderPost(post),
 		};
@@ -54,6 +56,7 @@ tables.BlogCache.sourcedFrom(PageBuilder);
 export class CachedBlog extends tables.BlogCache {
 	async get(query) {
 		const cached = await super.get(query);
+		if (!cached) return { status: 404 };
 		return {
 			contentType: 'text/html',
 			data: cached.content,

@@ -109,7 +109,8 @@ async function awaitStableCacheHit(url: string, accept: string): Promise<Respons
 		last = conditional;
 		await sleep(250);
 	}
-	return last as Response;
+	if (last === null) throw new Error('awaitStableCacheHit: all fetch attempts threw for ' + url);
+	return last;
 }
 
 void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
