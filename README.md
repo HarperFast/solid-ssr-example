@@ -37,6 +37,18 @@ curl -X PATCH http://localhost:9926/Post/0 \
 
 - This repo includes a `caching-test.js` script for quickly demonstrating and validating the caching behavior. Give it a try with `node caching-test.js` (component must be running with Harper).
 
+## Deploying
+
+The app must be built before Harper can serve it — `resources.js` reads `dist/client/index.html`
+and imports `dist/server/entry-server.js` at load time. Locally, the `postinstall` script handles
+that (`npm i` runs `npm run build`).
+
+> [!IMPORTANT]
+> Harper v5 blocks package installation scripts by default (it installs with `--ignore-scripts`),
+> so `postinstall` does **not** run on a Harper deploy. Either deploy with the `allowInstallScripts`
+> option, or run `npm run build` yourself and deploy with `dist/` already present. Without one of
+> those, the component fails at startup with `ENOENT` on `dist/client/index.html`.
+
 ## Tests
 
 Integration tests live in `integrationTests/` and run against a real, ephemeral Harper instance via [`@harperfast/integration-testing`](https://www.npmjs.com/package/@harperfast/integration-testing). They cover the SSR render path (`UncachedBlog` / `CachedBlog`), Harper's multi-tier caching on the `BlogCache` table (conditional-request 304 cache hits and source-invalidation), and the `Post` REST API.
