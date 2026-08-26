@@ -21,7 +21,7 @@ async function renderPost(post) {
 	const html = template
 		.replace(`<!--app-head-->`, head)
 		.replace(`<!--app-html-->`, rendered.html ?? '')
-		.replace(`<!--app-data-->`, `<script>window.__INITIAL_POST_DATA__ = ${JSON.stringify(post)};</script>`);
+		.replace(`<!--app-data-->`, `<script>window.__INITIAL_POST_DATA__ = ${JSON.stringify(post).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')};</script>`);
 
 	return html;
 }
@@ -44,7 +44,11 @@ export class UncachedBlog extends tables.Post {
 class PageBuilder extends tables.Post {
 	async get(query) {
 		const post = await super.get(query);
-		if (!post) return { status: 404 };
+		// Return null rather than a 404 response descriptor: Harper treats a falsy
+		// source result as "this source cannot fulfill", so nothing is written to
+		// BlogCache and the miss surfaces as CachedBlog's 404. Returning an object
+		// here would cache the 404 as if it were the page.
+		if (!post) return null;
 		return {
 			content: await renderPost(post),
 		};

@@ -255,7 +255,10 @@ void suite('Solid SSR + Harper caching', (ctx: ContextWithHarper) => {
 		);
 		const afterHTML = await afterMutation.text();
 		// The re-sourced render must include the new comment from the mutated Post.
-		assert.match(afterHTML, new RegExp(marker), 're-cached CachedBlog HTML must reflect the updated source Post');
+		assert.ok(
+			afterHTML.includes(marker),
+			're-cached CachedBlog HTML must reflect the updated source Post'
+		);
 
 		// Once the freshly re-sourced entry settles, conditional requests should again 304.
 		const reCached = await awaitStableCacheHit(blogURL, 'text/html');
